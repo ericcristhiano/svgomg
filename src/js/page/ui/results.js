@@ -1,12 +1,8 @@
-import { strToEl } from '../utils.js';
+import { strToEl, humanSize } from '../utils.js';
 
 function round(num, places) {
   const mult = 10 ** places;
   return Math.floor(Math.round(num * mult)) / mult;
-}
-
-function humanSize(bytes) {
-  return bytes < 1024 ? `${bytes} bytes` : `${round(bytes / 1024, 2)}k`;
 }
 
 export default class Results {

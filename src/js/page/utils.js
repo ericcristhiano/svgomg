@@ -36,6 +36,28 @@ export function readFileAsText(file) {
   return new Response(file).text();
 }
 
+export async function filterAndReadSvgFiles(fileList) {
+  const allFiles = [...fileList];
+  const svgFiles = allFiles.filter((file) =>
+    file.name.toLowerCase().endsWith('.svg'),
+  );
+  const skippedCount = allFiles.length - svgFiles.length;
+
+  const files = await Promise.all(
+    svgFiles.map(async (file) => ({
+      data: await readFileAsText(file),
+      filename: file.name,
+    })),
+  );
+
+  return { files, skippedCount };
+}
+
+export function humanSize(bytes) {
+  if (bytes < 1024) return `${bytes} bytes`;
+  return `${Math.floor(Math.round((bytes / 1024) * 100)) / 100}k`;
+}
+
 function transitionClassFunc({ removeClass = false } = {}) {
   return (element, className = 'active', transitionClass = 'transition') => {
     const hasClass = element.classList.contains(className);

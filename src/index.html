@@ -57,7 +57,7 @@
                 {% include "partials/icons/open.svg" %}
                 <span class="menu-item-text">Open SVG</span>
               </button>
-              <input type="file" class="load-file-input" accept=".svg">
+              <input type="file" class="load-file-input" accept=".svg" multiple>
             </li>
             <li>
               <label class="menu-input menu-item">
@@ -104,6 +104,7 @@
         </form>
       </div>
       <div class="main">
+        <div class="file-list-container"></div>
         <div class="output">
           <div class="action-button-container">
             <div class="minor-action-container"></div>
