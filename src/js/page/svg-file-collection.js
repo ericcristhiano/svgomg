@@ -24,6 +24,9 @@ export default class SvgFileCollection {
 
   add(filename, inputItem) {
     const id = _nextId++;
+    const displayName = filename.endsWith('.svg')
+      ? filename.slice(0, -4)
+      : filename;
     const entry = {
       id,
       filename,
@@ -31,6 +34,8 @@ export default class SvgFileCollection {
       outputItem: null,
       status: 'pending',
       error: null,
+      displayName,
+      keywords: [],
     };
 
     this._files.push(entry);
@@ -73,6 +78,16 @@ export default class SvgFileCollection {
     if (!entry) return;
 
     Object.assign(entry, changes);
+    this.emitter.emit('change', entry);
+  }
+
+  updateMetadata(id, { displayName, keywords }) {
+    const entry = this._files.find((file) => file.id === id);
+    if (!entry) return;
+
+    if (displayName !== undefined) entry.displayName = displayName;
+    if (keywords !== undefined) entry.keywords = keywords;
+
     this.emitter.emit('change', entry);
   }
 

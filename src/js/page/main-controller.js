@@ -5,7 +5,10 @@ import Output from './ui/output.js';
 import DownloadButton from './ui/download-button.js';
 import DownloadAllButton from './ui/download-all-button.js';
 import CopyButton from './ui/copy-button.js';
+import CopyBgButton from './ui/copy-bg-button.js';
+import ExportButton from './ui/export-button.js';
 import BgFillButton from './ui/bg-fill-button.js';
+import { generateStyleguideExport } from './styleguide-export.js';
 import Results from './ui/results.js';
 import Settings from './ui/settings.js';
 import MainMenu from './ui/main-menu.js';
@@ -30,6 +33,8 @@ export default class MainController {
     this._downloadButtonUi = new DownloadButton();
     this._downloadAllButtonUi = new DownloadAllButton();
     this._copyButtonUi = new CopyButton();
+    this._copyBgButtonUi = new CopyBgButton();
+    this._exportButtonUi = new ExportButton();
     this._resultsUi = new Results();
     this._settingsUi = new Settings();
     this._mainMenuUi = new MainMenu();
@@ -64,9 +69,18 @@ export default class MainController {
     window.addEventListener('keydown', (event) => this._onGlobalKeyDown(event));
     window.addEventListener('paste', (event) => this._onGlobalPaste(event));
     window.addEventListener('copy', (event) => this._onGlobalCopy(event));
+    this._copyBgButtonUi.emitter.on('copy', ({ success }) =>
+      this._toastsUi.show(
+        success ? 'CSS background copied' : 'Nothing to copy',
+        { duration: 2000 },
+      ),
+    );
+    this._exportButtonUi.emitter.on('click', () => this._exportStyleguide());
 
     // state
     this._inputItem = null;
+    this._activeDisplayName = '';
+    this._activeKeywords = [];
     this._cache = new ResultsCache(10);
     this._latestCompressJobId = 0;
     this._userHasInteracted = false;
@@ -84,14 +98,17 @@ export default class MainController {
     this._fileCollection.emitter.on('add', (entry) => {
       this._fileListUi.addFile(entry);
       this._updateFileListVisibility();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
     });
     this._fileCollection.emitter.on('remove', (entry) => {
       this._fileListUi.removeFile(entry.id);
       this._updateFileListVisibility();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
     });
     this._fileCollection.emitter.on('change', (entry) => {
       this._fileListUi.updateFile(entry.id, entry);
       this._updateDownloadAllEnabled();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
     });
     this._fileCollection.emitter.on('active-change', (entry) => {
       if (entry) this._fileListUi.setActive(entry.id);
@@ -115,6 +132,12 @@ export default class MainController {
       this._fileCollection.remove(Number(id)),
     );
     this._fileListUi.emitter.on('clearAll', () => this._clearAllFiles());
+    this._fileListUi.emitter.on('rename', ({ id, displayName }) =>
+      this._fileCollection.updateMetadata(Number(id), { displayName }),
+    );
+    this._fileListUi.emitter.on('keywords', ({ id, keywords }) =>
+      this._fileCollection.updateMetadata(Number(id), { keywords }),
+    );
 
     // Wire download-all button
     this._downloadAllButtonUi.emitter.on('click', () =>
@@ -163,8 +186,10 @@ export default class MainController {
       minorActionContainer.append(
         bgFillUi.container,
         this._copyButtonUi.container,
+        this._copyBgButtonUi.container,
       );
       actionContainer.append(
+        this._exportButtonUi.container,
         this._downloadAllButtonUi.container,
         this._downloadButtonUi.container,
       );
@@ -365,6 +390,8 @@ export default class MainController {
     // Sync legacy state with new active file
     this._inputItem = entry.inputItem;
     this._inputFilename = entry.filename;
+    this._activeDisplayName = entry.displayName;
+    this._activeKeywords = entry.keywords;
     this._cache.purge();
 
     const settings = this._settingsUi.getSettings();
@@ -429,6 +456,23 @@ export default class MainController {
     this._outputUi.reset();
     this._resultsUi.update({ size: 0, comparisonSize: 0 });
     this._mainMenuUi.show();
+  }
+
+  async _exportStyleguide() {
+    const html = generateStyleguideExport(this._fileCollection.files);
+    if (!html) {
+      this._toastsUi.show('Nothing to export', { duration: 2000 });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(html);
+      this._toastsUi.show('Styleguide HTML copied to clipboard', {
+        duration: 3000,
+      });
+    } catch {
+      this._toastsUi.show('Failed to copy to clipboard', { duration: 2000 });
+    }
   }
 
   _syncActiveFile(changes) {
@@ -626,6 +670,7 @@ export default class MainController {
     this._outputUi.update(svgFile);
     this._downloadButtonUi.setDownload(this._inputFilename, svgFile);
     this._copyButtonUi.setCopyText(svgFile.text);
+    this._copyBgButtonUi.setSvgText(svgFile.text);
 
     this._resultsUi.update({
       comparisonSize: compareToFile && (await compareToFile.size({ compress })),

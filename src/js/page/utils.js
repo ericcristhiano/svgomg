@@ -95,6 +95,16 @@ function transitionClassFunc({ removeClass = false } = {}) {
 export const transitionToClass = transitionClassFunc();
 export const transitionFromClass = transitionClassFunc({ removeClass: true });
 
+export function svgToCssBackground(svgText) {
+  const encoded = svgText
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/#/g, '%23')
+    .replace(/'/g, '%27');
+
+  return `url('data:image/svg+xml,${encoded}')`;
+}
+
 export function trackFocusMethod() {
   let focusMethod = 'mouse';
 
