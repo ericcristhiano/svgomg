@@ -47,6 +47,18 @@
     }
   }
 
+  &.copy-bg-button {
+    .icon {
+      fill: #7b1fa2;
+    }
+  }
+
+  &.export-button {
+    .icon {
+      fill: #0277bd;
+    }
+  }
+
   &.major-floating-action-button {
     width: 56px;
     height: 56px;

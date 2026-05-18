@@ -71,5 +71,8 @@
       "unicorn/prevent-abbreviations": "off",
       "unicorn/require-post-message-target-origin": "off"
     }
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
   }
 }

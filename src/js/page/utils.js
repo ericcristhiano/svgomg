@@ -36,6 +36,28 @@ export function readFileAsText(file) {
   return new Response(file).text();
 }
 
+export async function filterAndReadSvgFiles(fileList) {
+  const allFiles = [...fileList];
+  const svgFiles = allFiles.filter((file) =>
+    file.name.toLowerCase().endsWith('.svg'),
+  );
+  const skippedCount = allFiles.length - svgFiles.length;
+
+  const files = await Promise.all(
+    svgFiles.map(async (file) => ({
+      data: await readFileAsText(file),
+      filename: file.name,
+    })),
+  );
+
+  return { files, skippedCount };
+}
+
+export function humanSize(bytes) {
+  if (bytes < 1024) return `${bytes} bytes`;
+  return `${Math.floor(Math.round((bytes / 1024) * 100)) / 100}k`;
+}
+
 function transitionClassFunc({ removeClass = false } = {}) {
   return (element, className = 'active', transitionClass = 'transition') => {
     const hasClass = element.classList.contains(className);
@@ -72,6 +94,16 @@ function transitionClassFunc({ removeClass = false } = {}) {
 
 export const transitionToClass = transitionClassFunc();
 export const transitionFromClass = transitionClassFunc({ removeClass: true });
+
+export function svgToCssBackground(svgText) {
+  const encoded = svgText
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/#/g, '%23')
+    .replace(/'/g, '%27');
+
+  return `url('data:image/svg+xml,${encoded}')`;
+}
 
 export function trackFocusMethod() {
   let focusMethod = 'mouse';

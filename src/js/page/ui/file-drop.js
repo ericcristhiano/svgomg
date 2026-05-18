@@ -4,7 +4,7 @@ import {
   domReady,
   transitionToClass,
   transitionFromClass,
-  readFileAsText,
+  filterAndReadSvgFiles,
 } from '../utils.js';
 
 export default class FileDrop {
@@ -52,12 +52,12 @@ export default class FileDrop {
     this._activeEnters = 0;
     transitionFromClass(this.container);
 
-    const file = event.dataTransfer.files[0];
-    if (!file) return;
+    const { files, skippedCount } = await filterAndReadSvgFiles(
+      event.dataTransfer.files,
+    );
 
-    this.emitter.emit('svgDataLoad', {
-      data: await readFileAsText(file),
-      filename: file.name,
-    });
+    if (files.length === 0) return;
+
+    this.emitter.emit('svgBatchLoad', { files, skippedCount });
   }
 }

@@ -3,7 +3,7 @@ import {
   domReady,
   transitionFromClass,
   transitionToClass,
-  readFileAsText,
+  filterAndReadSvgFiles,
 } from '../utils.js';
 import Spinner from './spinner.js';
 
@@ -105,17 +105,18 @@ export default class MainMenu {
   }
 
   async _onFileInputChange() {
-    const file = this._loadFileInput.files[0];
+    if (!this._loadFileInput.files.length) return;
 
-    if (!file) return;
+    const { files, skippedCount } = await filterAndReadSvgFiles(
+      this._loadFileInput.files,
+    );
+
+    if (files.length === 0) return;
 
     this._loadFileBtn.append(this._spinner.container);
     this._spinner.show();
 
-    this.emitter.emit('svgDataLoad', {
-      data: await readFileAsText(file),
-      filename: file.name,
-    });
+    this.emitter.emit('svgBatchLoad', { files, skippedCount });
   }
 
   async _onLoadDemoClick(event) {

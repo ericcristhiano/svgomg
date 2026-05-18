@@ -3,8 +3,13 @@ import Svgo from './svgo.js';
 import { domReady } from './utils.js';
 import Output from './ui/output.js';
 import DownloadButton from './ui/download-button.js';
+import DownloadAllButton from './ui/download-all-button.js';
 import CopyButton from './ui/copy-button.js';
+import CopyBgButton from './ui/copy-bg-button.js';
+import ExportButton from './ui/export-button.js';
 import BgFillButton from './ui/bg-fill-button.js';
+import { addStyleguideClasses } from './styleguide-classes.js';
+import { generateStyleguideExport } from './styleguide-export.js';
 import Results from './ui/results.js';
 import Settings from './ui/settings.js';
 import MainMenu from './ui/main-menu.js';
@@ -16,6 +21,9 @@ import ResultsContainer from './ui/results-container.js';
 import ViewToggler from './ui/view-toggler.js';
 import ResultsCache from './results-cache.js';
 import MainUi from './ui/main-ui.js';
+import FileList from './ui/file-list.js';
+import SvgFile from './svg-file.js';
+import SvgFileCollection from './svg-file-collection.js';
 
 const svgo = new Svgo();
 
@@ -25,7 +33,10 @@ export default class MainController {
     this._mainUi = null;
     this._outputUi = new Output();
     this._downloadButtonUi = new DownloadButton();
+    this._downloadAllButtonUi = new DownloadAllButton();
     this._copyButtonUi = new CopyButton();
+    this._copyBgButtonUi = new CopyBgButton();
+    this._exportButtonUi = new ExportButton();
     this._resultsUi = new Results();
     this._settingsUi = new Settings();
     this._mainMenuUi = new MainMenu();
@@ -47,7 +58,10 @@ export default class MainController {
     this._mainMenuUi.emitter.on('svgDataLoad', (event) =>
       this._onInputChange(event),
     );
-    dropUi.emitter.on('svgDataLoad', (event) => this._onInputChange(event));
+    this._mainMenuUi.emitter.on('svgBatchLoad', (event) =>
+      this._onBatchInput(event),
+    );
+    dropUi.emitter.on('svgBatchLoad', (event) => this._onBatchInput(event));
     this._mainMenuUi.emitter.on('error', ({ error }) =>
       this._handleError(error),
     );
@@ -57,13 +71,95 @@ export default class MainController {
     window.addEventListener('keydown', (event) => this._onGlobalKeyDown(event));
     window.addEventListener('paste', (event) => this._onGlobalPaste(event));
     window.addEventListener('copy', (event) => this._onGlobalCopy(event));
+    this._copyBgButtonUi.emitter.on('copy', ({ success }) =>
+      this._toastsUi.show(
+        success ? 'CSS background copied' : 'Nothing to copy',
+        { duration: 2000 },
+      ),
+    );
+    this._exportButtonUi.emitter.on('click', () => this._exportStyleguide());
 
     // state
     this._inputItem = null;
+    this._activeDisplayName = '';
+    this._activeKeywords = [];
     this._cache = new ResultsCache(10);
     this._latestCompressJobId = 0;
     this._userHasInteracted = false;
     this._reloading = false;
+    this._fileCollection = new SvgFileCollection();
+
+    // Batch optimization state
+    this._optimizationQueue = [];
+    this._optimizing = false;
+    this._optimizationVersion = 0;
+    this._fileListUi = new FileList();
+    this._fileListUi.hide();
+
+    // Wire collection events to file list UI
+    this._fileCollection.emitter.on('add', (entry) => {
+      this._fileListUi.addFile(entry);
+      this._updateFileListVisibility();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
+    });
+    this._fileCollection.emitter.on('remove', (entry) => {
+      this._fileListUi.removeFile(entry.id);
+      this._updateFileListVisibility();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
+    });
+    this._fileCollection.emitter.on('change', (entry) => {
+      this._fileListUi.updateFile(entry.id, entry);
+      this._updateDownloadAllEnabled();
+      this._exportButtonUi.setFiles(this._fileCollection.files);
+
+      // If the changed entry is the active file, update the download button
+      // so that renaming immediately reflects in the download filename.
+      const currentActive = this._fileCollection.activeFile;
+      if (currentActive && currentActive.id === entry.id) {
+        const downloadInfo = this._getDownloadInfo();
+        if (downloadInfo) {
+          this._downloadButtonUi.setDownload(
+            downloadInfo.filename,
+            downloadInfo.file,
+          );
+        }
+      }
+    });
+    this._fileCollection.emitter.on('active-change', (entry) => {
+      if (entry) this._fileListUi.setActive(entry.id);
+      this._onActiveFileChange(entry);
+      // Re-prioritize queue: move active file to front
+      if (entry && this._optimizationQueue.length > 1) {
+        const idx = this._optimizationQueue.indexOf(entry.id);
+        if (idx > 0) {
+          this._optimizationQueue.splice(idx, 1);
+          this._optimizationQueue.unshift(entry.id);
+        }
+      }
+    });
+
+    // Wire file list UI events back to collection
+    // FileList emits string IDs from dataset; collection uses numeric IDs
+    this._fileListUi.emitter.on('activate', (id) =>
+      this._fileCollection.setActive(Number(id)),
+    );
+    this._fileListUi.emitter.on('remove', (id) =>
+      this._fileCollection.remove(Number(id)),
+    );
+    this._fileListUi.emitter.on('clearAll', () => this._clearAllFiles());
+    this._fileListUi.emitter.on('rename', ({ id, displayName }) =>
+      this._fileCollection.updateMetadata(Number(id), { displayName }),
+    );
+    this._fileListUi.emitter.on('keywords', ({ id, keywords }) =>
+      this._fileCollection.updateMetadata(Number(id), { keywords }),
+    );
+
+    // Wire download-all button
+    this._downloadAllButtonUi.emitter.on('click', () =>
+      this._downloadAllButtonUi.download(this._fileCollection.files, {
+        styleguideClasses: this._settingsUi.getSettings().styleguideClasses,
+      }),
+    );
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
@@ -101,11 +197,19 @@ export default class MainController {
         this._settingsUi.container,
       );
 
+      this._fileListContainer = document.querySelector('.file-list-container');
+      this._fileListContainer.append(this._fileListUi.container);
+
       minorActionContainer.append(
         bgFillUi.container,
         this._copyButtonUi.container,
+        this._copyBgButtonUi.container,
       );
-      actionContainer.append(this._downloadButtonUi.container);
+      actionContainer.append(
+        this._exportButtonUi.container,
+        this._downloadAllButtonUi.container,
+        this._downloadButtonUi.container,
+      );
       outputElement.append(this._outputUi.container);
       container.append(this._toastsUi.container, dropUi.container);
       menuExtraElement.append(changelogUi.container);
@@ -207,6 +311,26 @@ export default class MainController {
     const settings = this._settingsUi.getSettings();
     this._saveSettings(settings);
     this._compressSvg(settings);
+
+    // Re-optimize non-active files in the collection when settings change.
+    // The active file is already handled by _compressSvg above.
+    if (this._fileCollection.length > 1) {
+      this._optimizationVersion++;
+      const activeFile = this._fileCollection.activeFile;
+      const activeId = activeFile ? activeFile.id : null;
+
+      for (const file of this._fileCollection.files) {
+        if (file.id !== activeId) {
+          this._fileCollection.update(file.id, {
+            outputItem: null,
+            status: 'pending',
+            error: null,
+          });
+        }
+      }
+
+      this._queueOptimization();
+    }
   }
 
   async _onSettingsReset(oldSettings) {
@@ -223,25 +347,156 @@ export default class MainController {
   }
 
   async _onInputChange({ data, filename }) {
-    const settings = this._settingsUi.getSettings();
+    this._onBatchInput({ files: [{ data, filename }], skippedCount: 0 });
+  }
+
+  async _onBatchInput({ files, skippedCount }) {
     this._userHasInteracted = true;
 
-    try {
-      this._inputItem = await svgo.wrapOriginal(data);
-      this._inputFilename = filename;
-    } catch (error) {
-      this._mainMenuUi.stopSpinner();
-      this._handleError(new Error(`Load failed: ${error.message}`));
+    if (skippedCount > 0) {
+      this._toastsUi.show(
+        `${files.length} file${
+          files.length === 1 ? '' : 's'
+        } loaded, ${skippedCount} skipped (not SVG)`,
+        { duration: 5000 },
+      );
+    }
+
+    // Cancel any in-flight optimization before wrapping new files.
+    // abort() terminates the worker and rejects all pending requests,
+    // so it must run before we send new wrapOriginal messages.
+    this._optimizationVersion++;
+    this._optimizationQueue = [];
+    svgo.abort();
+
+    this._fileCollection.clear();
+    this._fileListUi.clear();
+    this._cache.purge();
+
+    const results = await Promise.allSettled(
+      files.map(({ data, filename }) =>
+        svgo.wrapOriginal(data).then((inputItem) => ({ inputItem, filename })),
+      ),
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        this._fileCollection.add(result.value.filename, result.value.inputItem);
+      } else {
+        this._handleError(new Error(`Load failed: ${result.reason.message}`));
+      }
+    }
+
+    if (this._fileCollection.length > 0) {
+      // _onActiveFileChange (triggered by the first add) already set
+      // _inputItem, _inputFilename, and called _compressSvg for the active file.
+      this._outputUi.reset();
+      this._mainUi.activate();
+
+      // Queue batch optimization for remaining (non-active) files
+      this._queueOptimization();
+    }
+
+    this._mainMenuUi.allowHide = true;
+    this._mainMenuUi.hide();
+  }
+
+  _onActiveFileChange(entry) {
+    if (!entry) return;
+
+    // Sync legacy state with new active file
+    this._inputItem = entry.inputItem;
+    this._inputFilename = entry.filename;
+    this._activeDisplayName = entry.displayName;
+    this._activeKeywords = entry.keywords;
+    this._cache.purge();
+
+    const settings = this._settingsUi.getSettings();
+
+    if (entry.status === 'done' && entry.outputItem) {
+      // File already optimized -- show cached results immediately
+      if (settings.original) {
+        this._updateForFile(entry.inputItem, {
+          compress: settings.gzip,
+        });
+      } else {
+        this._updateForFile(entry.outputItem, {
+          compareToFile: entry.inputItem,
+          compress: settings.gzip,
+        });
+      }
+    } else {
+      // File not yet optimized -- show original and reset output
+      this._compressSvg(settings);
+      this._outputUi.reset();
+    }
+  }
+
+  _updateFileListVisibility() {
+    if (this._fileCollection.length > 1) {
+      this._fileListUi.show();
+      this._downloadAllButtonUi.show();
+      if (this._fileListContainer) {
+        this._fileListContainer.classList.add('has-files');
+      }
+    } else {
+      this._fileListUi.hide();
+      this._downloadAllButtonUi.hide();
+      if (this._fileListContainer) {
+        this._fileListContainer.classList.remove('has-files');
+      }
+    }
+  }
+
+  _updateDownloadAllEnabled() {
+    const anyOptimizing = this._fileCollection.files.some(
+      (file) => file.status === 'optimizing' || file.status === 'pending',
+    );
+    this._downloadAllButtonUi.setEnabled(!anyOptimizing);
+  }
+
+  _clearAllFiles() {
+    this._fileCollection.clear();
+    this._fileListUi.clear();
+    this._updateFileListVisibility();
+
+    // Reset legacy single-file state
+    this._inputItem = null;
+    this._inputFilename = undefined;
+    this._cache.purge();
+
+    // Cancel any in-progress batch optimization
+    this._optimizationQueue = [];
+    this._optimizationVersion++;
+
+    // Reset output and show main menu
+    this._outputUi.reset();
+    this._resultsUi.update({ size: 0, comparisonSize: 0 });
+    this._mainMenuUi.show();
+  }
+
+  async _exportStyleguide() {
+    const html = generateStyleguideExport(this._fileCollection.files);
+    if (!html) {
+      this._toastsUi.show('Nothing to export', { duration: 2000 });
       return;
     }
 
-    this._cache.purge();
+    try {
+      await navigator.clipboard.writeText(html);
+      this._toastsUi.show('Styleguide HTML copied to clipboard', {
+        duration: 3000,
+      });
+    } catch {
+      this._toastsUi.show('Failed to copy to clipboard', { duration: 2000 });
+    }
+  }
 
-    this._compressSvg(settings);
-    this._outputUi.reset();
-    this._mainUi.activate();
-    this._mainMenuUi.allowHide = true;
-    this._mainMenuUi.hide();
+  _syncActiveFile(changes) {
+    const activeFile = this._fileCollection.activeFile;
+    if (activeFile) {
+      this._fileCollection.update(activeFile.id, changes);
+    }
   }
 
   _handleError(error) {
@@ -261,6 +516,8 @@ export default class MainController {
   }
 
   async _compressSvg(settings) {
+    if (!this._inputItem) return;
+
     const thisJobId = (this._latestCompressJobId = Math.random());
 
     await svgo.abort();
@@ -285,6 +542,13 @@ export default class MainController {
         compareToFile: this._inputItem,
         compress: settings.gzip,
       });
+
+      this._syncActiveFile({
+        outputItem: cacheMatch,
+        status: 'done',
+        error: null,
+      });
+
       return;
     }
 
@@ -299,19 +563,178 @@ export default class MainController {
       });
 
       this._cache.add(settings.fingerprint, resultFile);
+
+      this._syncActiveFile({
+        outputItem: resultFile,
+        status: 'done',
+        error: null,
+      });
     } catch (error) {
       if (error.name === 'AbortError') return;
       error.message = `Minifying error: ${error.message}`;
       this._handleError(error);
+
+      this._syncActiveFile({ status: 'error', error: error.message });
     } finally {
       this._downloadButtonUi.done();
     }
   }
 
+  _queueOptimization() {
+    const activeFile = this._fileCollection.activeFile;
+    const activeId = activeFile ? activeFile.id : null;
+
+    // Build queue: active file first, then remaining pending/error files
+    const pendingFiles = this._fileCollection.files.filter(
+      (file) =>
+        file.id !== activeId &&
+        (file.status === 'pending' || file.status === 'error'),
+    );
+
+    this._optimizationQueue = [];
+    if (activeId) {
+      const activeEntry = this._fileCollection.getById(activeId);
+      if (
+        activeEntry &&
+        (activeEntry.status === 'pending' || activeEntry.status === 'error')
+      ) {
+        this._optimizationQueue.push(activeId);
+      }
+    }
+
+    for (const file of pendingFiles) {
+      this._optimizationQueue.push(file.id);
+    }
+
+    if (!this._optimizing && this._optimizationQueue.length > 0) {
+      this._processOptimizationQueue();
+    }
+  }
+
+  async _processOptimizationQueue() {
+    this._optimizing = true;
+    const version = this._optimizationVersion;
+    const settings = this._settingsUi.getSettings();
+
+    while (this._optimizationQueue.length > 0) {
+      // Check if settings changed (version incremented) -- abort if so
+      if (version !== this._optimizationVersion) {
+        break;
+      }
+
+      const fileId = this._optimizationQueue.shift();
+      const entry = this._fileCollection.getById(fileId);
+
+      // Skip if file was removed or already optimized
+      if (!entry || entry.status === 'done') {
+        continue;
+      }
+
+      this._fileCollection.update(fileId, { status: 'optimizing' });
+
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const resultFile = await svgo.process(entry.inputItem.text, settings);
+
+        // Check for cancellation after async work
+        if (version !== this._optimizationVersion) {
+          break;
+        }
+
+        this._fileCollection.update(fileId, {
+          outputItem: resultFile,
+          status: 'done',
+          error: null,
+        });
+
+        // If this is the active file, update the UI display
+        const activeFile = this._fileCollection.activeFile;
+        if (activeFile && activeFile.id === fileId) {
+          this._updateForFile(resultFile, {
+            compareToFile: entry.inputItem,
+            compress: settings.gzip,
+          });
+        }
+      } catch (error) {
+        // Check for cancellation
+        if (version !== this._optimizationVersion) {
+          break;
+        }
+
+        if (error.name === 'AbortError') {
+          // Re-queue the file if it was aborted for a reason other than version change
+          if (version === this._optimizationVersion) {
+            this._fileCollection.update(fileId, {
+              status: 'pending',
+              error: null,
+            });
+          }
+
+          continue;
+        }
+
+        this._fileCollection.update(fileId, {
+          status: 'error',
+          error: `Minifying error: ${error.message}`,
+        });
+      }
+    }
+
+    this._optimizing = false;
+  }
+
+  _getDownloadInfo(svgFile) {
+    const settings = this._settingsUi.getSettings();
+    const activeFile = this._fileCollection.activeFile;
+    const downloadFilename = activeFile
+      ? `${activeFile.displayName}.svg`
+      : this._inputFilename;
+
+    // If no svgFile provided, use the active file's outputItem (or inputItem)
+    const baseSvgFile =
+      svgFile ||
+      (activeFile && (activeFile.outputItem || activeFile.inputItem));
+    if (!baseSvgFile) return null;
+
+    const file = settings.styleguideClasses
+      ? new SvgFile(
+          addStyleguideClasses(baseSvgFile.text, {
+            includePreviewStyles: false,
+          }),
+          baseSvgFile.width,
+          baseSvgFile.height,
+        )
+      : baseSvgFile;
+
+    return { filename: downloadFilename, file };
+  }
+
   async _updateForFile(svgFile, { compareToFile, compress }) {
-    this._outputUi.update(svgFile);
-    this._downloadButtonUi.setDownload(this._inputFilename, svgFile);
-    this._copyButtonUi.setCopyText(svgFile.text);
+    const settings = this._settingsUi.getSettings();
+    let displayFile = svgFile;
+    let copyText = svgFile.text;
+
+    if (settings.styleguideClasses) {
+      // Display version: classes + preview styles (for visual preview)
+      const displayText = addStyleguideClasses(svgFile.text);
+      displayFile = new SvgFile(displayText, svgFile.width, svgFile.height);
+
+      // Clean version: classes only, no preview styles (for copy-to-clipboard)
+      copyText = addStyleguideClasses(svgFile.text, {
+        includePreviewStyles: false,
+      });
+    }
+
+    // Build download info using shared helper
+    const downloadInfo = this._getDownloadInfo(svgFile);
+
+    this._outputUi.update(displayFile);
+    this._downloadButtonUi.setDownload(
+      downloadInfo.filename,
+      downloadInfo.file,
+    );
+    this._copyButtonUi.setCopyText(copyText);
+    this._copyBgButtonUi.setSvgText(svgFile.text);
 
     this._resultsUi.update({
       comparisonSize: compareToFile && (await compareToFile.size({ compress })),
