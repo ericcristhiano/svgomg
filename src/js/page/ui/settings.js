@@ -121,6 +121,11 @@ export default class Settings {
     }
 
     for (const inputEl of this._pluginInputs) {
+      if (inputEl.name === 'styleguideClasses') {
+        output.styleguideClasses = inputEl.checked;
+        continue;
+      }
+
       fingerprint.push(Number(inputEl.checked));
       output.plugins[inputEl.name] = inputEl.checked;
     }

@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { createNanoEvents } from 'nanoevents';
 import { strToEl } from '../utils.js';
+import { addStyleguideClasses } from '../styleguide-classes.js';
 import Spinner from './spinner.js';
 
 export default class DownloadAllButton {
@@ -38,7 +39,7 @@ export default class DownloadAllButton {
     this.container.disabled = !enabled;
   }
 
-  async download(files) {
+  async download(files, { styleguideClasses } = {}) {
     if (this._generating || !files || files.length === 0) return;
 
     this._generating = true;
@@ -50,7 +51,12 @@ export default class DownloadAllButton {
       for (const entry of files) {
         const svgFile = entry.outputItem || entry.inputItem;
         if (svgFile) {
-          zip.file(entry.filename, svgFile.text);
+          const text = styleguideClasses
+            ? addStyleguideClasses(svgFile.text, {
+                includePreviewStyles: false,
+              })
+            : svgFile.text;
+          zip.file(`${entry.displayName}.svg`, text);
         }
       }
 

@@ -8,6 +8,7 @@ import CopyButton from './ui/copy-button.js';
 import CopyBgButton from './ui/copy-bg-button.js';
 import ExportButton from './ui/export-button.js';
 import BgFillButton from './ui/bg-fill-button.js';
+import { addStyleguideClasses } from './styleguide-classes.js';
 import { generateStyleguideExport } from './styleguide-export.js';
 import Results from './ui/results.js';
 import Settings from './ui/settings.js';
@@ -21,6 +22,7 @@ import ViewToggler from './ui/view-toggler.js';
 import ResultsCache from './results-cache.js';
 import MainUi from './ui/main-ui.js';
 import FileList from './ui/file-list.js';
+import SvgFile from './svg-file.js';
 import SvgFileCollection from './svg-file-collection.js';
 
 const svgo = new Svgo();
@@ -109,6 +111,19 @@ export default class MainController {
       this._fileListUi.updateFile(entry.id, entry);
       this._updateDownloadAllEnabled();
       this._exportButtonUi.setFiles(this._fileCollection.files);
+
+      // If the changed entry is the active file, update the download button
+      // so that renaming immediately reflects in the download filename.
+      const currentActive = this._fileCollection.activeFile;
+      if (currentActive && currentActive.id === entry.id) {
+        const downloadInfo = this._getDownloadInfo();
+        if (downloadInfo) {
+          this._downloadButtonUi.setDownload(
+            downloadInfo.filename,
+            downloadInfo.file,
+          );
+        }
+      }
     });
     this._fileCollection.emitter.on('active-change', (entry) => {
       if (entry) this._fileListUi.setActive(entry.id);
@@ -141,7 +156,9 @@ export default class MainController {
 
     // Wire download-all button
     this._downloadAllButtonUi.emitter.on('click', () =>
-      this._downloadAllButtonUi.download(this._fileCollection.files),
+      this._downloadAllButtonUi.download(this._fileCollection.files, {
+        styleguideClasses: this._settingsUi.getSettings().styleguideClasses,
+      }),
     );
 
     if ('serviceWorker' in navigator) {
@@ -666,10 +683,57 @@ export default class MainController {
     this._optimizing = false;
   }
 
+  _getDownloadInfo(svgFile) {
+    const settings = this._settingsUi.getSettings();
+    const activeFile = this._fileCollection.activeFile;
+    const downloadFilename = activeFile
+      ? `${activeFile.displayName}.svg`
+      : this._inputFilename;
+
+    // If no svgFile provided, use the active file's outputItem (or inputItem)
+    const baseSvgFile =
+      svgFile ||
+      (activeFile && (activeFile.outputItem || activeFile.inputItem));
+    if (!baseSvgFile) return null;
+
+    const file = settings.styleguideClasses
+      ? new SvgFile(
+          addStyleguideClasses(baseSvgFile.text, {
+            includePreviewStyles: false,
+          }),
+          baseSvgFile.width,
+          baseSvgFile.height,
+        )
+      : baseSvgFile;
+
+    return { filename: downloadFilename, file };
+  }
+
   async _updateForFile(svgFile, { compareToFile, compress }) {
-    this._outputUi.update(svgFile);
-    this._downloadButtonUi.setDownload(this._inputFilename, svgFile);
-    this._copyButtonUi.setCopyText(svgFile.text);
+    const settings = this._settingsUi.getSettings();
+    let displayFile = svgFile;
+    let copyText = svgFile.text;
+
+    if (settings.styleguideClasses) {
+      // Display version: classes + preview styles (for visual preview)
+      const displayText = addStyleguideClasses(svgFile.text);
+      displayFile = new SvgFile(displayText, svgFile.width, svgFile.height);
+
+      // Clean version: classes only, no preview styles (for copy-to-clipboard)
+      copyText = addStyleguideClasses(svgFile.text, {
+        includePreviewStyles: false,
+      });
+    }
+
+    // Build download info using shared helper
+    const downloadInfo = this._getDownloadInfo(svgFile);
+
+    this._outputUi.update(displayFile);
+    this._downloadButtonUi.setDownload(
+      downloadInfo.filename,
+      downloadInfo.file,
+    );
+    this._copyButtonUi.setCopyText(copyText);
     this._copyBgButtonUi.setSvgText(svgFile.text);
 
     this._resultsUi.update({
